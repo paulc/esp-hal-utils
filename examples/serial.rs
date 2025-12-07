@@ -125,7 +125,6 @@ async fn esp_now_task(esp_now: &'static mut EspNow<'static>) {
         let status = esp_now.send_async(&BROADCAST_ADDRESS, b"BROADCAST").await;
         defmt::info!("ESP-NOW: Send broadcast -> {:?}", status);
         defmt::info!("ESP-NOW: peers={}", esp_now.peer_count().unwrap());
-        /*
         match select(ticker.next(), async {
             let r = esp_now.receive_async().await;
             defmt::info!("ESP-NOW: Received {:?}", r);
@@ -155,7 +154,6 @@ async fn esp_now_task(esp_now: &'static mut EspNow<'static>) {
             }
             Either::Second(_) => (),
         }
-        */
     }
 }
 
