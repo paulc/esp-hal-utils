@@ -177,7 +177,8 @@ async fn main(spawner: Spawner) {
         loop {
             match with_timeout(Duration::from_millis(100), esp_now.receive_async()).await {
                 Ok(r) => {
-                    if r.info.src_address == hub_address {
+                    if r.info.src_address == hub_address && r.info.dst_address != BROADCAST_ADDRESS
+                    {
                         defmt::info!(
                             "HUB RESPONSE: [{}]->[{}] >> {} [rssi={}]",
                             format_mac(&r.info.src_address),
