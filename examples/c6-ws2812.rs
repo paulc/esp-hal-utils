@@ -99,11 +99,7 @@ async fn main(spawner: Spawner) {
     #[cfg(feature = "esp32c3")]
     let gpio = peripherals.GPIO10;
 
-    let channel = rmt
-        .channel0
-        .configure_tx(&tx_config)
-        .unwrap()
-        .with_pin(gpio);
+    let channel = rmt.channel0.configure_tx(gpio, tx_config).unwrap();
 
     // Pass to WS2812 driver
     let ws2812 = ws2812::Ws2812::new(channel, RgbLayout::Grb);

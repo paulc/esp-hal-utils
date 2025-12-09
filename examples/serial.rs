@@ -25,7 +25,7 @@ use embassy_futures::select::{select, Either};
 use embassy_sync::{blocking_mutex::raw::NoopRawMutex, signal::Signal};
 use embassy_time::{Duration, Ticker, Timer};
 
-use static_cell::{make_static, StaticCell};
+use static_cell::StaticCell;
 
 use esp_hal_utils::format_mac::format_mac;
 
@@ -56,37 +56,31 @@ async fn main(spawner: Spawner) {
         sw_int.software_interrupt0,
     );
 
-    /*
-    // Initialise ESP_NOW
-    defmt::info!("Initialise ESP_NOW");
-    let wifi = peripherals.WIFI;
-    let (mut controller, interfaces) = esp_radio::wifi::new(wifi, Default::default()).unwrap();
-    controller
-        .set_mode(esp_radio::wifi::WifiMode::Station)
-        .unwrap();
-    controller.start().unwrap();
+    // XXX ESP-NOW not working on esp32c6
+    // #[cfg(not(feature = "esp32c6"))]
+    {
+        let esp_radio_ctrl = esp_radio::init().unwrap();
 
-    controller
-        .set_mode(esp_radio::wifi::WifiMode::Station)
-        .unwrap();
-    controller.start().unwrap();
+        let wifi = peripherals.WIFI;
+        let (mut controller, interfaces) =
+            esp_radio::wifi::new(&esp_radio_ctrl, wifi, Default::default()).unwrap();
+        controller.set_mode(esp_radio::wifi::WifiMode::Sta).unwrap();
+        controller.start().unwrap();
 
-    // let esp_now = ESP_NOW.init(interfaces.esp_now);
-    let mut esp_now = interfaces.esp_now;
-    esp_now.set_channel(11).unwrap();
+        let mut esp_now = interfaces.esp_now;
+        esp_now.set_channel(11).unwrap();
 
-    defmt::info!("ESP-NOW VERSION: {}", esp_now.version().unwrap());
-    defmt::info!(
-        "        MAC ADDRESS: {}",
-        format_mac(&esp_radio::wifi::station_mac())
-    );
-
-    let status = esp_now.send_async(&BROADCAST_ADDRESS, b"BROADCAST").await;
-    defmt::info!("ESP-NOW: Send broadcast -> {:?}", status);
-    defmt::info!("ESP-NOW: peers={}", esp_now.peer_count().unwrap());
-
-    spawner.spawn(esp_now_task(esp_now)).unwrap();
-    */
+        defmt::info!("ESP-NOW VERSION: {}", esp_now.version().unwrap());
+        defmt::info!(
+            "        MAC ADDRESS: {}",
+            format_mac(&esp_radio::wifi::sta_mac())
+        );
+        let status = esp_now
+            .send_async(&BROADCAST_ADDRESS, b"=== BROADCAST ===")
+            .await;
+        defmt::info!("ESP-NOW: Send broadcast -> {:?}", status);
+        defmt::info!("ESP-NOW: peers={}", esp_now.peer_count().unwrap());
+    }
 
     // Initialise Serial
     let (rx, tx) = UsbSerialJtag::new(peripherals.USB_DEVICE)
@@ -109,12 +103,13 @@ async fn main(spawner: Spawner) {
     }
 }
 
+// #[cfg(not(feature = "esp32c6"))]
 #[embassy_executor::task]
 async fn esp_now_task(esp_now: &'static mut EspNow<'static>) {
     esp_now.set_channel(11).unwrap();
     defmt::info!(
         "ESP-NOW: mac={} version={} peers={}",
-        format_mac(&esp_radio::wifi::station_mac()),
+        format_mac(&esp_radio::wifi::sta_mac()),
         esp_now.version().unwrap(),
         esp_now.peer_count().unwrap()
     );
@@ -122,7 +117,9 @@ async fn esp_now_task(esp_now: &'static mut EspNow<'static>) {
     loop {
         ticker.next().await;
         defmt::info!(">> NOW");
-        let status = esp_now.send_async(&BROADCAST_ADDRESS, b"BROADCAST").await;
+        let status = esp_now
+            .send_async(&BROADCAST_ADDRESS, b"=== BROADCAST ===")
+            .await;
         defmt::info!("ESP-NOW: Send broadcast -> {:?}", status);
         defmt::info!("ESP-NOW: peers={}", esp_now.peer_count().unwrap());
         match select(ticker.next(), async {
@@ -132,7 +129,7 @@ async fn esp_now_task(esp_now: &'static mut EspNow<'static>) {
                 if !esp_now.peer_exists(&r.info.src_address) {
                     esp_now
                         .add_peer(PeerInfo {
-                            interface: EspNowWifiInterface::Station,
+                            interface: EspNowWifiInterface::Sta,
                             peer_address: r.info.src_address,
                             lmk: None,
                             channel: None,
