@@ -125,7 +125,7 @@ async fn main(spawner: Spawner) {
         .into_async();
 
     // Wait for bus to initialise
-    Timer::after_millis(1).await;
+    Timer::after_millis(50).await;
 
     defmt::info!("Scan I2C bus: START");
     for addr in 0..=127 {
@@ -199,14 +199,14 @@ async fn main(spawner: Spawner) {
 async fn find_hub(esp_now: &mut EspNow<'_>) -> [u8; 6] {
     loop {
         let r = esp_now.receive_async().await;
-        defmt::info!(
-            "ESP-NOW RX: [{}]->[{}] >> {} [rssi={}]",
-            format_mac(&r.info.src_address),
-            format_mac(&r.info.dst_address),
-            core::str::from_utf8(r.data()).unwrap_or("UTF8 Error"),
-            r.info.rx_control.rssi
-        );
         if r.info.dst_address == BROADCAST_ADDRESS && r.data() == b"<<HUB>>" {
+            defmt::info!(
+                "ESP-NOW RX: [{}]->[{}] >> {} [rssi={}]",
+                format_mac(&r.info.src_address),
+                format_mac(&r.info.dst_address),
+                core::str::from_utf8(r.data()).unwrap_or("UTF8 Error"),
+                r.info.rx_control.rssi
+            );
             defmt::info!(">> RX HUB BROADCAST");
             if !esp_now.peer_exists(&r.info.src_address) {
                 defmt::info!("ESP-NOW ADD PEER: {}", format_mac(&r.info.src_address));

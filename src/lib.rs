@@ -5,6 +5,7 @@
 
 pub mod aht20;
 pub mod bmp280;
+pub mod crc;
 //pub mod ds18b20;
 //pub mod esp_hal_rmt_onewire;
 pub mod format_mac;
