@@ -113,10 +113,12 @@ fn main() -> ! {
     // Initialise I2C in separate scope to ensure it is dropped
     let (bmp280_t, bmp280_p, aht20_t, aht20_rh) = {
         let i2c_config = i2c::master::Config::default().with_frequency(Rate::from_khz(100));
+        let scl = peripherals.GPIO4;
+        let sda = peripherals.GPIO5;
         let mut i2c = i2c::master::I2c::new(peripherals.I2C0, i2c_config)
             .expect("Error initailising I2C")
-            .with_scl(peripherals.GPIO4)
-            .with_sda(peripherals.GPIO5);
+            .with_scl(scl)
+            .with_sda(sda);
 
         bmp280_blocking::initialise(&mut i2c).unwrap();
         aht20_blocking::initialise(&mut i2c).unwrap();
@@ -149,19 +151,40 @@ fn main() -> ! {
 
     write!(
         &mut buf,
-        "C6-SENSOR: bmp280 <t: {} p: {}> aht20 <t: {} rh: {}> battery: <v: {}>",
-        bmp280_t, bmp280_p, aht20_t, aht20_rh, adc_avg
+        "C6-SENSOR: [{}] bmp280 <t: {} p: {}> aht20 <t: {} rh: {}> battery: <v: {}>",
+        boot_time / 1000,
+        bmp280_t,
+        bmp280_p,
+        aht20_t,
+        aht20_rh,
+        adc_avg
     )
     .unwrap();
 
     let status = esp_now.send(&hub_address, buf.as_bytes()).unwrap().wait();
     defmt::info!("ESP-NOW: TX (blocking) -> {:?}", status);
 
-    // delay.delay_millis(1000);
-    defmt::info!("SLEEPING:");
-
     // Turn off I2C power
     i2c_pwr.set_low();
+
+    // Force I2C pins into Input mode to retuce leakage before sleep
+    unsafe {
+        use esp_hal::gpio::{AnyPin, Input, InputConfig, Pull};
+
+        let gpio4 = AnyPin::steal(4);
+        let gpio5 = AnyPin::steal(5);
+        let _ = Input::new(gpio4, InputConfig::default().with_pull(Pull::None));
+        let _ = Input::new(gpio5, InputConfig::default().with_pull(Pull::None));
+    }
+
+    defmt::info!("SLEEPING:");
+    if let SleepSource::Undefined = wakeup_cause {
+        for i in 0..2 {
+            defmt::info!("WAIT [{}]", i);
+            delay.delay_millis(1000);
+        }
+    }
+
     rtc.sleep_deep(&[&timer]);
 }
 
