@@ -82,22 +82,27 @@ async fn main(spawner: Spawner) {
         .spawn(frame_writer(tx, &channel_tx_receiver))
         .unwrap();
 
-    let mut ticker = Ticker::every(Duration::from_secs(5));
+    let mut ticker = Ticker::every(Duration::from_secs(1));
     let mut rx_count = 0_usize;
     let mut msg = heapless::String::<64>::new();
 
     loop {
         match select(ticker.next(), channel_rx_receiver.receive()).await {
             Either::First(_) => {
-                defmt::info!("[MSG] >>> Tick");
                 msg.clear();
                 write!(&mut msg, "RX: {}", rx_count).unwrap();
                 let data: heapless::Vec<u8, MAX_PAYLOAD_LEN> = msg.as_bytes().try_into().unwrap();
                 channel_tx_sender.send(data).await;
+                defmt::info!(">>> TX Frame: {}", msg);
             }
             Either::Second(frame) => {
                 rx_count += 1;
-                defmt::info!("[MSG] >>> RX Frame: [{}] {} bytes", rx_count, frame.len());
+                defmt::info!(
+                    ">>> RX Frame: [{}] {} bytes - {:?}",
+                    rx_count,
+                    frame.len(),
+                    frame[..frame.len().min(8)]
+                );
             }
         }
     }

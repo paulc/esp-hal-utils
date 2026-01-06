@@ -9,6 +9,7 @@ use esp_hal::Async;
 
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::channel::{Receiver, Sender};
+use embassy_time::Timer;
 
 use crate::crc::crc16;
 use crate::tinybuf::Buffer;
@@ -69,7 +70,7 @@ pub async fn frame_reader(
         let r = embedded_io_async::Read::read(&mut rx, &mut usb_buf).await;
         match r {
             Ok(len) => {
-                defmt::info!("Serial RX: {} bytes", len);
+                // defmt::info!("Serial RX: {} bytes", len);
                 buf.push(&usb_buf[..len]).expect("Buffer Overflow"); // safe as usb_buf < buf
                 match state {
                     FrameState::Wait => {
@@ -112,6 +113,7 @@ pub async fn frame_reader(
                 defmt::error!("USB read error: {:?}", e);
             }
         }
+        Timer::after_millis(1).await; // Yield to scheduler
     }
 }
 
@@ -151,15 +153,15 @@ async fn process_frame<const N: usize>(
     if buf.len() >= payload_len + CRC_LEN {
         // We have full frame - check CRC
         let data = buf.as_slice();
-        if crc16(&data[0..payload_len])
+        if crc16(&data[..payload_len])
             == u16::from_le_bytes([data[payload_len], data[payload_len + 1]])
         {
             // Valid frame
-            defmt::info!(
-                ">> RX FRAME:: [{} bytes] {:?}...",
-                payload_len,
-                data[..data.len().min(8)]
-            );
+            // defmt::info!(
+            //     ">> RX FRAME:: [{} bytes] {:?}...",
+            //     payload_len,
+            //     data[..payload_len.min(8)]
+            // );
             // Send to channel
             let vec: heapless::Vec<u8, MAX_PAYLOAD_LEN> =
                 data[..payload_len].try_into().expect("Frame too long");

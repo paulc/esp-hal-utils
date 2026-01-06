@@ -57,6 +57,8 @@ defmt-rtt = "1.0.0"
 heapless = { version = "0.9.1", features = ["defmt", "serde"] }
 anyhow = { version = "1.0.100", default-features = false }
 static_cell = { version = "2.1.1", features = ["nightly"] }
+embedded-graphics = "0.8.1"
+lcd-async = "0.1.1"
 
 [profile.dev]
 # Rust debug is too slow.
