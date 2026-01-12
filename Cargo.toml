@@ -59,6 +59,9 @@ anyhow = { version = "1.0.100", default-features = false }
 static_cell = { version = "2.1.1", features = ["nightly"] }
 embedded-graphics = "0.8.1"
 lcd-async = "0.1.1"
+esp-now-protocol = { version = "0.1.0", path = "../esp-now-protocol" }
+postcard = "1.1.3"
+portable-atomic = "1.13.0"
 
 [profile.dev]
 # Rust debug is too slow.

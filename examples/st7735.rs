@@ -81,11 +81,10 @@ async fn main(_spawner: Spawner) {
 
     // Create DMA buffers for SPI
     #[allow(clippy::manual_div_ceil)]
-    let (rx_buffer, rx_descriptors, tx_buffer, tx_descriptors) = esp_hal::dma_buffers!(4, 32_000);
+    let (rx_buffer, rx_descriptors, tx_buffer, tx_descriptors) = esp_hal::dma_buffers!(64, 32_000);
     let dma_rx_buf = DmaRxBuf::new(rx_descriptors, rx_buffer).unwrap();
     let dma_tx_buf = DmaTxBuf::new(tx_descriptors, tx_buffer).unwrap();
 
-    // SPI pins for ESP32-C3 (adjust these according to your wiring)
     let sclk = peripherals.GPIO6; // SCL
     let mosi = peripherals.GPIO7; // SDA
     let res = peripherals.GPIO10; // RES (Reset)

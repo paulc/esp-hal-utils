@@ -87,8 +87,8 @@ pub async fn frame_reader(
                                     //
                                     // We cant advance the cursor as we dont know how long the
                                     // frame was and there may be a valid frame following in the
-                                    // same buffer - there is a risk that the data contains
-                                    // FRAME_START
+                                    // same buffer
+                                    // XXX There is a risk that the data contains FRAME_START XXX
                                 } else {
                                     if process_frame(&mut buf, n, &channel).await {
                                         state = FrameState::Wait;
