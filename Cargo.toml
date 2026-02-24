@@ -7,7 +7,8 @@ version      = "0.1.0"
 [features]
 # Need to set chip otherwise rust-analyzer gets confused
 # (override using cargo build/run --no-default-features --features ...)
-default = ["esp32c3"]
+# default = ["esp32c3"]
+default = []
 search-masks = []
 esp32s3 = [
     "esp-hal/esp32s3",
@@ -51,17 +52,18 @@ embassy-embedded-hal = { version = "0.5.0", features = ["defmt"] }
 embedded-hal-async = { version = "1.0.0", features = ["defmt-03"] }
 embedded-io-async = { version = "0.6.1" }
 
+anyhow = { version = "1.0.100", default-features = false }
 critical-section = "1.2.0"
 defmt = "1.0.1"
 defmt-rtt = "1.0.0"
-heapless = { version = "0.9.1", features = ["defmt", "serde"] }
-anyhow = { version = "1.0.100", default-features = false }
-static_cell = { version = "2.1.1", features = ["nightly"] }
 embedded-graphics = "0.8.1"
+heapless = { version = "0.9.1", features = ["defmt", "serde"] }
 lcd-async = "0.1.1"
-esp-now-protocol = { version = "0.1.0", path = "../esp-now-protocol" }
-postcard = "1.1.3"
 portable-atomic = "1.13.0"
+postcard = "1.1.3"
+static_cell = { version = "2.1.1", features = ["nightly"] }
+
+esp-now-protocol = { version = "0.1.0", path = "../esp-now-protocol", default-features = false }
 
 [profile.dev]
 # Rust debug is too slow.
