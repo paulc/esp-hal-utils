@@ -41,7 +41,7 @@ use embedded_graphics::{
 use lcd_async::{
     interface,
     models::ST7789,
-    options::{Orientation, Rotation, ColorOrder, ColorInversion},
+    options::{ColorInversion, ColorOrder, Orientation, Rotation},
     raw_framebuf::RawFrameBuf,
     Builder, TestImage,
 };
@@ -132,7 +132,7 @@ async fn main(_spawner: Spawner) {
         .orientation(Orientation::default().rotate(Rotation::Deg270))
         .color_order(ColorOrder::Rgb)
         .invert_colors(ColorInversion::Inverted)
-        .display_size(172,320)
+        .display_size(172, 320)
         .display_offset(34, 0)
         .init(&mut delay)
         .await
@@ -145,7 +145,7 @@ async fn main(_spawner: Spawner) {
 
     {
         // Create a framebuffer in separate scope to ensure dropped
-        let mut raw_fb = 
+        let mut raw_fb =
             RawFrameBuf::<Rgb565, _>::new(frame_buffer.as_mut_slice(), WIDTH.into(), HEIGHT.into());
 
         // Clear the framebuffer to black
@@ -165,7 +165,7 @@ async fn main(_spawner: Spawner) {
 
     {
         // Create a framebuffer in separate scope to ensure dropped
-        let mut raw_fb = 
+        let mut raw_fb =
             RawFrameBuf::<Rgb565, _>::new(frame_buffer.as_mut_slice(), WIDTH.into(), HEIGHT.into());
 
         // Clear the framebuffer to black
@@ -183,7 +183,11 @@ async fn main(_spawner: Spawner) {
     Timer::after_millis(5000).await;
 
     loop {
-        for (n,c) in [("RED",Rgb565::RED), ("BLUE",Rgb565::BLUE), ("GREEN",Rgb565::GREEN)] {
+        for (n, c) in [
+            ("RED", Rgb565::RED),
+            ("BLUE", Rgb565::BLUE),
+            ("GREEN", Rgb565::GREEN),
+        ] {
             let mut raw_fb = RawFrameBuf::<Rgb565, _>::new(
                 frame_buffer.as_mut_slice(),
                 WIDTH.into(),
