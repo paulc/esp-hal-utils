@@ -230,8 +230,7 @@ where
             .write(self.address, &[0x00, 0x80, 0x00])
             .await
             .map_err(|_| Ina219Error::I2cError)?;
-        self.config = Ina219Config::default();
-        Ok(())
+        self.write_config(Ina219Config::default()).await
     }
     pub async fn read_config(&mut self) -> Result<Ina219Config, Ina219Error> {
         let mut buf = [0u8; 2];
