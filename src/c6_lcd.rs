@@ -35,17 +35,13 @@ const DISPLAY_HEIGHT: u16 = 172;
 const PIXEL_SIZE: usize = 2; // RGB565 = 2 bytes per pixel
 const FRAME_SIZE: usize = (DISPLAY_WIDTH as usize) * (DISPLAY_HEIGHT as usize) * PIXEL_SIZE;
 
-static FRAME_BUFFER: StaticCell<[u8; FRAME_SIZE]> = StaticCell::new();
-
-static LCD_CHANNEL: StaticCell<Channel<NoopRawMutex, (LcdMessage, bool), 1>> = StaticCell::new();
-static LCD_CHANNEL_RX: StaticCell<Receiver<NoopRawMutex, (LcdMessage, bool), 1>> =
-    StaticCell::new();
-
 #[derive(Debug, Clone)]
 pub enum LcdError {
     DisplayInit,
     TaskInit,
 }
+
+pub type LcdSender = Sender<'static, NoopRawMutex, (LcdMessage, bool), 1>;
 
 // Init C6 display
 // (Note - peripherals are fixed to make ownership easier)
@@ -59,7 +55,7 @@ pub async fn init_lcd(
     spi_dev: esp_hal::peripherals::SPI2<'static>, // SPI Device
     dma_ch: esp_hal::peripherals::DMA_CH0<'static>, // DMA device
     spawner: embassy_executor::Spawner,
-) -> Result<Sender<'static, NoopRawMutex, (LcdMessage, bool), 1>, LcdError> {
+) -> Result<LcdSender, LcdError> {
     // Create DMA buffers for SPI
     #[allow(clippy::manual_div_ceil)]
     let (rx_buffer, rx_descriptors, tx_buffer, tx_descriptors) = esp_hal::dma_buffers!(64, 32_000);
@@ -112,10 +108,16 @@ pub async fn init_lcd(
 
     info!("Display initialized!");
 
-    // Create LCD task
+    static LCD_CHANNEL: StaticCell<Channel<NoopRawMutex, (LcdMessage, bool), 1>> =
+        StaticCell::new();
+    static LCD_CHANNEL_RX: StaticCell<Receiver<NoopRawMutex, (LcdMessage, bool), 1>> =
+        StaticCell::new();
+
     let lcd_channel = LCD_CHANNEL.init(Channel::new());
     let lcd_rx = LCD_CHANNEL_RX.init(lcd_channel.receiver());
     let lcd_tx = lcd_channel.sender();
+
+    // Create LCD task
     spawner
         .spawn(lcd_task(display, lcd_rx))
         .map_err(|_| LcdError::TaskInit)?;
@@ -147,6 +149,7 @@ async fn lcd_task(
     lcd_rx: &'static mut Receiver<'static, NoopRawMutex, (LcdMessage, bool), 1>,
 ) {
     // Initialize frame buffer
+    static FRAME_BUFFER: StaticCell<[u8; FRAME_SIZE]> = StaticCell::new();
     let frame_buffer = FRAME_BUFFER.init_with(|| [0; FRAME_SIZE]);
     let mut lines = heapless::Deque::<heapless::String<40>, DISPLAY_LINES>::new();
     loop {

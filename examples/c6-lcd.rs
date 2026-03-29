@@ -6,14 +6,7 @@
     holding buffers for the duration of a data transfer."
 )]
 
-use esp_hal::{
-    clock::CpuClock,
-    gpio::{Input, InputConfig, Pull},
-    i2c,
-    time::Rate,
-    timer::timg::TimerGroup,
-    Async,
-};
+use esp_hal::{clock::CpuClock, gpio::Pin, i2c, time::Rate, timer::timg::TimerGroup, Async};
 
 #[cfg(target_arch = "riscv32")]
 use esp_hal::interrupt::software::SoftwareInterruptControl;
@@ -23,6 +16,7 @@ use esp_backtrace as _;
 
 use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
 use embassy_executor::Spawner;
+use embassy_futures::select::{select, Either};
 use embassy_sync::{blocking_mutex::raw::NoopRawMutex, mutex::Mutex};
 use embassy_time::{Duration, Ticker, Timer};
 
@@ -36,7 +30,8 @@ use defmt::info;
 
 use static_cell::StaticCell;
 
-use esp_hal_utils::c6_lcd;
+use esp_hal_utils::c6_lcd::{init_lcd, LcdMessage, LcdSender};
+use esp_hal_utils::encoder::{self, EncoderMsg};
 use esp_hal_utils::ina219;
 
 static I2C_BUS: StaticCell<Mutex<NoopRawMutex, i2c::master::I2c<Async>>> = StaticCell::new();
@@ -63,7 +58,7 @@ async fn main(spawner: Spawner) {
     info!("Embassy initialized!");
 
     // Init LCD (pass peripherals)
-    let lcd_tx = c6_lcd::init_lcd(
+    let mut lcd_tx = init_lcd(
         peripherals.GPIO15,  // DC (Data/Command)
         peripherals.GPIO14,  // CS (Chip Select)
         peripherals.GPIO7,   // CLK
@@ -76,10 +71,6 @@ async fn main(spawner: Spawner) {
     )
     .await
     .unwrap();
-
-    lcd_tx
-        .send((c6_lcd::LcdMessage::Background(Rgb565::RED), true))
-        .await;
 
     // Initialise I2C Bus
     let i2c_config = i2c::master::Config::default().with_frequency(Rate::from_khz(100));
@@ -131,118 +122,111 @@ async fn main(spawner: Spawner) {
         sadc
     );
 
-    // Rotary encoder
-    let mut enc_clk = Input::new(
-        peripherals.GPIO9,
-        InputConfig::default().with_pull(Pull::Up),
-    );
-    let enc_dt = Input::new(
-        peripherals.GPIO18,
-        InputConfig::default().with_pull(Pull::Up),
-    );
-    let mut enc_sw = Input::new(
-        peripherals.GPIO19,
-        InputConfig::default().with_pull(Pull::Up),
+    let encoder_rx = encoder::init(
+        spawner.clone(),
+        peripherals.GPIO9.degrade(),
+        peripherals.GPIO18.degrade(),
+        peripherals.GPIO19.degrade(),
     );
 
-    use embassy_futures::select::{select, Either};
-    let mut counter = 0_i32;
-    loop {
-        match select(enc_clk.wait_for_any_edge(), enc_sw.wait_for_falling_edge()).await {
-            Either::First(_) => {
-                counter += match (enc_clk.is_high(), enc_dt.is_high()) {
-                    (true, false) | (false, true) => 1,
-                    (true, true) | (false, false) => -1,
-                };
-                defmt::info!("Counter: {}", counter);
-            }
-            Either::Second(_) => {
-                defmt::info!("Button Press");
-            }
-        }
-    }
-
-    /*
     let mut ticker = Ticker::every(Duration::from_millis(100));
+    let mut reading = ina219::Ina219Reading {
+        bus_v: 0.0,
+        shunt_ma: 0.0,
+    };
+    let mut counter = 0_i32;
 
     loop {
-        defmt::info!(
-            "SW >> {} / DT >> {} / CLK >> {}",
-            enc_sw.is_high(),
-            enc_dt.is_high(),
-            enc_clk.is_high()
-        );
-
-        // Update display
-        lcd_tx
-            .send((LcdMessage::Background(Rgb565::BLUE), false))
-            .await;
-        lcd_tx
-            .send((
-                LcdMessage::Static("Vbus", Point::new(10, 20), 14, Rgb565::WHITE),
-                false,
-            ))
-            .await;
-        lcd_tx
-            .send((
-                LcdMessage::Static("Ishunt", Point::new(170, 20), 14, Rgb565::WHITE),
-                false,
-            ))
-            .await;
-
-        let mut reading = ina219::Ina219Reading {
-            bus_v: 0.0,
-            shunt_ma: 0.0,
-        };
-        match ina219_device.read().await {
-            Ok(r) => {
-                reading = r;
+        match select(ticker.next(), encoder_rx.receive()).await {
+            Either::First(_) => {
+                // Update display
+                reading =
+                    update_display(&mut lcd_tx, reading.clone(), ina219_device.read().await).await;
             }
-            Err(ina219::Ina219Error::NotReady) => {
-                lcd_tx
-                    .send((
-                        LcdMessage::Static("Not Ready", Point::new(10, 100), 14, Rgb565::RED),
-                        false,
-                    ))
-                    .await;
-            }
-            Err(ina219::Ina219Error::Overflow) => {
-                lcd_tx
-                    .send((
-                        LcdMessage::Static("Overflow", Point::new(10, 100), 14, Rgb565::RED),
-                        false,
-                    ))
-                    .await;
-            }
-            Err(ina219::Ina219Error::I2cError) => {
-                lcd_tx
-                    .send((
-                        LcdMessage::Static("I2C Error", Point::new(10, 100), 14, Rgb565::RED),
-                        false,
-                    ))
-                    .await;
-            }
+            Either::Second(msg) => match msg {
+                EncoderMsg::Button => {
+                    defmt::info!("BUTTON")
+                }
+                EncoderMsg::Increment => {
+                    counter += 1;
+                    defmt::info!("COUNTER: {}", counter)
+                }
+                EncoderMsg::Decrement => {
+                    counter -= 1;
+                    defmt::info!("COUNTER: {}", counter)
+                }
+            },
         }
-        // Always display reading
-        let mut v_txt = heapless::String::<40>::new();
-        let _ = write!(&mut v_txt, "{:>7.3}V", reading.bus_v);
-        lcd_tx
-            .send((
-                LcdMessage::Text(v_txt, Point::new(10, 80), 24, Rgb565::WHITE),
-                false,
-            ))
-            .await;
-        let mut i_txt = heapless::String::<40>::new();
-        let _ = write!(&mut i_txt, "{:>7.3}mA", reading.shunt_ma);
-        lcd_tx
-            .send((
-                LcdMessage::Text(i_txt, Point::new(170, 80), 24, Rgb565::WHITE),
-                true, // Last message - update display
-            ))
-            .await;
-
-        // Wait for next tick
-        ticker.next().await
     }
-    */
+}
+
+async fn update_display(
+    lcd_tx: &mut LcdSender,
+    previous: ina219::Ina219Reading,
+    reading: Result<ina219::Ina219Reading, ina219::Ina219Error>,
+) -> ina219::Ina219Reading {
+    let mut next = previous;
+    lcd_tx
+        .send((LcdMessage::Background(Rgb565::BLUE), false))
+        .await;
+    lcd_tx
+        .send((
+            LcdMessage::Static("Vbus", Point::new(10, 20), 14, Rgb565::WHITE),
+            false,
+        ))
+        .await;
+    lcd_tx
+        .send((
+            LcdMessage::Static("Ishunt", Point::new(170, 20), 14, Rgb565::WHITE),
+            false,
+        ))
+        .await;
+
+    match reading {
+        Ok(r) => {
+            next = r;
+        }
+        Err(ina219::Ina219Error::NotReady) => {
+            lcd_tx
+                .send((
+                    LcdMessage::Static("Not Ready", Point::new(10, 100), 14, Rgb565::RED),
+                    false,
+                ))
+                .await;
+        }
+        Err(ina219::Ina219Error::Overflow) => {
+            lcd_tx
+                .send((
+                    LcdMessage::Static("Overflow", Point::new(10, 100), 14, Rgb565::RED),
+                    false,
+                ))
+                .await;
+        }
+        Err(ina219::Ina219Error::I2cError) => {
+            lcd_tx
+                .send((
+                    LcdMessage::Static("I2C Error", Point::new(10, 100), 14, Rgb565::RED),
+                    false,
+                ))
+                .await;
+        }
+    }
+    // Always display reading
+    let mut v_txt = heapless::String::<40>::new();
+    let _ = write!(&mut v_txt, "{:>7.3}V", next.bus_v);
+    lcd_tx
+        .send((
+            LcdMessage::Text(v_txt, Point::new(10, 80), 24, Rgb565::WHITE),
+            false,
+        ))
+        .await;
+    let mut i_txt = heapless::String::<40>::new();
+    let _ = write!(&mut i_txt, "{:>7.3}mA", next.shunt_ma);
+    lcd_tx
+        .send((
+            LcdMessage::Text(i_txt, Point::new(170, 80), 24, Rgb565::WHITE),
+            true, // Last message - update display
+        ))
+        .await;
+    next
 }

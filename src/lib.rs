@@ -9,6 +9,7 @@ pub mod crc;
 //pub mod ds18b20;
 //pub mod esp_hal_rmt_onewire;
 pub mod c6_lcd;
+pub mod encoder;
 pub mod format_mac;
 pub mod ina219;
 pub mod rgb;
