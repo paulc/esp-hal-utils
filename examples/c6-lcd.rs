@@ -34,7 +34,10 @@ use esp_hal_utils::c6_lcd::{init_lcd, LcdMessage, LcdSender};
 use esp_hal_utils::encoder::{self, EncoderMsg};
 use esp_hal_utils::ina219;
 
+use portable_atomic::{AtomicI32, Ordering};
+
 static I2C_BUS: StaticCell<Mutex<NoopRawMutex, i2c::master::I2c<Async>>> = StaticCell::new();
+static ENCODER: AtomicI32 = AtomicI32::new(0);
 
 #[esp_rtos::main]
 async fn main(spawner: Spawner) {
@@ -113,7 +116,7 @@ async fn main(spawner: Spawner) {
         .await
         .unwrap();
 
-    let (brng, pga, badc, sadc) = ina219_device.read_config().await.unwrap().as_str();
+    let (brng, pga, badc, sadc) = ina219_device.config.as_str();
     defmt::info!(
         "INA219 Config: Brng: {} / PGA: {} / BADC: {} / SADC: {}",
         brng,
@@ -134,26 +137,64 @@ async fn main(spawner: Spawner) {
         bus_v: 0.0,
         shunt_ma: 0.0,
     };
-    let mut counter = 0_i32;
 
     loop {
         match select(ticker.next(), encoder_rx.receive()).await {
             Either::First(_) => {
                 // Update display
-                reading =
-                    update_display(&mut lcd_tx, reading.clone(), ina219_device.read().await).await;
+                reading = update_display(
+                    &mut lcd_tx,
+                    reading.clone(),
+                    ina219_device.read().await,
+                    &ina219_device.config.as_str(),
+                )
+                .await;
             }
             Either::Second(msg) => match msg {
+                // Handle encoder input
+                // - turn to increment/decrement selection
+                // - press to cycle setting
                 EncoderMsg::Button => {
-                    defmt::info!("BUTTON")
+                    // Get encoder_index: -1 not selected
+                    let encoder_index = ENCODER.load(Ordering::Relaxed).rem_euclid(5) - 1;
+                    let config = ina219_device.config.clone();
+                    match encoder_index {
+                        0 => {
+                            // BRNG
+                            ina219_device
+                                .write_config(config.with_brng(config.get_brng().cycle()))
+                                .await
+                                .unwrap();
+                        }
+                        1 => {
+                            // PGA
+                            ina219_device
+                                .write_config(config.with_pga(config.get_pga().cycle()))
+                                .await
+                                .unwrap();
+                        }
+                        2 => {
+                            // BADC
+                            ina219_device
+                                .write_config(config.with_badc(config.get_badc().cycle()))
+                                .await
+                                .unwrap();
+                        }
+                        3 => {
+                            // SADC
+                            ina219_device
+                                .write_config(config.with_sadc(config.get_sadc().cycle()))
+                                .await
+                                .unwrap();
+                        }
+                        _ => {}
+                    }
                 }
                 EncoderMsg::Increment => {
-                    counter += 1;
-                    defmt::info!("COUNTER: {}", counter)
+                    ENCODER.fetch_add(1, Ordering::Relaxed);
                 }
                 EncoderMsg::Decrement => {
-                    counter -= 1;
-                    defmt::info!("COUNTER: {}", counter)
+                    ENCODER.fetch_add(-1, Ordering::Relaxed);
                 }
             },
         }
@@ -164,24 +205,16 @@ async fn update_display(
     lcd_tx: &mut LcdSender,
     previous: ina219::Ina219Reading,
     reading: Result<ina219::Ina219Reading, ina219::Ina219Error>,
+    status: &(&str, &str, &str, &str),
 ) -> ina219::Ina219Reading {
     let mut next = previous;
+
+    // Clear screen
     lcd_tx
         .send((LcdMessage::Background(Rgb565::BLUE), false))
         .await;
-    lcd_tx
-        .send((
-            LcdMessage::Static("Vbus", Point::new(10, 20), 14, Rgb565::WHITE),
-            false,
-        ))
-        .await;
-    lcd_tx
-        .send((
-            LcdMessage::Static("Ishunt", Point::new(170, 20), 14, Rgb565::WHITE),
-            false,
-        ))
-        .await;
 
+    // Update reading (checking for errors)
     match reading {
         Ok(r) => {
             next = r;
@@ -189,7 +222,7 @@ async fn update_display(
         Err(ina219::Ina219Error::NotReady) => {
             lcd_tx
                 .send((
-                    LcdMessage::Static("Not Ready", Point::new(10, 100), 14, Rgb565::RED),
+                    LcdMessage::Static("Not Ready", Point::new(10, 105), 14, Rgb565::RED),
                     false,
                 ))
                 .await;
@@ -197,7 +230,7 @@ async fn update_display(
         Err(ina219::Ina219Error::Overflow) => {
             lcd_tx
                 .send((
-                    LcdMessage::Static("Overflow", Point::new(10, 100), 14, Rgb565::RED),
+                    LcdMessage::Static("Overflow", Point::new(10, 105), 14, Rgb565::RED),
                     false,
                 ))
                 .await;
@@ -205,28 +238,89 @@ async fn update_display(
         Err(ina219::Ina219Error::I2cError) => {
             lcd_tx
                 .send((
-                    LcdMessage::Static("I2C Error", Point::new(10, 100), 14, Rgb565::RED),
+                    LcdMessage::Static("I2C Error", Point::new(10, 105), 14, Rgb565::RED),
                     false,
                 ))
                 .await;
         }
     }
-    // Always display reading
+
+    // Display reading
     let mut v_txt = heapless::String::<40>::new();
-    let _ = write!(&mut v_txt, "{:>7.3}V", next.bus_v);
+    let _ = write!(&mut v_txt, "{:>8.3}V", next.bus_v);
     lcd_tx
         .send((
-            LcdMessage::Text(v_txt, Point::new(10, 80), 24, Rgb565::WHITE),
+            LcdMessage::Text(v_txt, Point::new(140, 25), 24, Rgb565::GREEN),
             false,
         ))
         .await;
     let mut i_txt = heapless::String::<40>::new();
-    let _ = write!(&mut i_txt, "{:>7.3}mA", next.shunt_ma);
+    let _ = write!(&mut i_txt, "{:>8.3}mA", next.shunt_ma);
     lcd_tx
         .send((
-            LcdMessage::Text(i_txt, Point::new(170, 80), 24, Rgb565::WHITE),
-            true, // Last message - update display
+            LcdMessage::Text(i_txt, Point::new(140, 55), 24, Rgb565::YELLOW),
+            false,
         ))
         .await;
+    let mut p_txt = heapless::String::<40>::new();
+    let _ = write!(&mut p_txt, "{:>8.3}mW", next.bus_v * next.shunt_ma);
+    lcd_tx
+        .send((
+            LcdMessage::Text(p_txt, Point::new(140, 85), 24, Rgb565::WHITE),
+            false,
+        ))
+        .await;
+
+    // Write Labels
+    for (i, label) in ["V(bus)", "I(shunt)", "Power"].iter().enumerate() {
+        lcd_tx
+            .send((
+                LcdMessage::Static(
+                    label,
+                    Point::new(10, 23 + (i as i32 * 30)),
+                    18,
+                    Rgb565::GREEN,
+                ),
+                false,
+            ))
+            .await;
+    }
+
+    // Write Settings
+    // Get encoder position to highlight selected (-1 is not selected)
+    let encoder_index = ENCODER.load(Ordering::Relaxed).rem_euclid(5) - 1;
+    let (brng, pga, badc, sadc) = status;
+    for (i, (label, value)) in [
+        ("Range", brng),
+        ("PGA", pga),
+        ("BADC", badc),
+        ("SADC", sadc),
+    ]
+    .iter()
+    .enumerate()
+    {
+        let mut status_txt = heapless::String::<40>::new();
+        let _ = write!(&mut status_txt, "{:<8}: {}", label, value);
+        lcd_tx
+            .send((
+                LcdMessage::Text(
+                    status_txt,
+                    Point::new(10, 124 + (i as i32 * 14)),
+                    12,
+                    if encoder_index == i as i32 {
+                        Rgb565::RED
+                    } else {
+                        Rgb565::GREEN
+                    },
+                ),
+                false,
+            ))
+            .await;
+    }
+
+    // Update display
+    lcd_tx.send((LcdMessage::Draw, true)).await;
+
+    // Return new reading
     next
 }

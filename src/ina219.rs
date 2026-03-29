@@ -36,6 +36,12 @@ pub enum Ina219Brng {
 }
 
 impl Ina219Brng {
+    pub fn cycle(&self) -> Self {
+        match self {
+            Ina219Brng::Brng16V => Ina219Brng::Brng32V,
+            Ina219Brng::Brng32V => Ina219Brng::Brng16V,
+        }
+    }
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Brng16V => "16V",
@@ -53,6 +59,14 @@ pub enum Ina219Pga {
 }
 
 impl Ina219Pga {
+    pub fn cycle(&self) -> Self {
+        match self {
+            Ina219Pga::Pga40mV => Ina219Pga::Pga80mV,
+            Ina219Pga::Pga80mV => Ina219Pga::Pga160mV,
+            Ina219Pga::Pga160mV => Ina219Pga::Pga320mV,
+            Ina219Pga::Pga320mV => Ina219Pga::Pga40mV,
+        }
+    }
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Pga40mV => "40mV",
@@ -80,6 +94,22 @@ pub enum Ina219Adc {
 }
 
 impl Ina219Adc {
+    pub fn cycle(&self) -> Self {
+        match self {
+            Ina219Adc::Adc9 => Ina219Adc::Adc10,
+            Ina219Adc::Adc10 => Ina219Adc::Adc11,
+            Ina219Adc::Adc11 => Ina219Adc::Adc12,
+            Ina219Adc::Adc12 => Ina219Adc::Adc12_1,
+            Ina219Adc::Adc12_1 => Ina219Adc::Adc12_2,
+            Ina219Adc::Adc12_2 => Ina219Adc::Adc12_4,
+            Ina219Adc::Adc12_4 => Ina219Adc::Adc12_8,
+            Ina219Adc::Adc12_8 => Ina219Adc::Adc12_16,
+            Ina219Adc::Adc12_16 => Ina219Adc::Adc12_32,
+            Ina219Adc::Adc12_32 => Ina219Adc::Adc12_64,
+            Ina219Adc::Adc12_64 => Ina219Adc::Adc12_128,
+            Ina219Adc::Adc12_128 => Ina219Adc::Adc9,
+        }
+    }
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Adc9 => "9-bit",
@@ -208,7 +238,7 @@ where
     i2c: I2cDevice<'a, M, BUS>,
     address: u8,
     shunt_resistor: f32,
-    config: Ina219Config,
+    pub config: Ina219Config,
 }
 
 impl<'a, M, BUS> Ina219<'a, M, BUS>
