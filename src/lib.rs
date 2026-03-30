@@ -8,6 +8,7 @@ pub mod bmp280;
 pub mod crc;
 //pub mod ds18b20;
 //pub mod esp_hal_rmt_onewire;
+#[cfg(feature = "esp32c6")]
 pub mod c6_lcd;
 pub mod encoder;
 pub mod format_mac;

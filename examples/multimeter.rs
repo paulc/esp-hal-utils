@@ -127,9 +127,9 @@ async fn main(spawner: Spawner) {
 
     let encoder_rx = encoder::init(
         spawner.clone(),
-        peripherals.GPIO9.degrade(),
         peripherals.GPIO18.degrade(),
         peripherals.GPIO19.degrade(),
+        peripherals.GPIO20.degrade(),
     );
 
     let mut ticker = Ticker::every(Duration::from_millis(100));
@@ -137,6 +137,7 @@ async fn main(spawner: Spawner) {
         bus_v: 0.0,
         shunt_ma: 0.0,
     };
+    let mut avg = heapless::Deque::<ina219::Ina219Reading, 10>::new();
 
     loop {
         match select(ticker.next(), encoder_rx.receive()).await {
@@ -198,6 +199,18 @@ async fn main(spawner: Spawner) {
                 }
             },
         }
+        if avg.is_full() {
+            let (v, i) = avg.iter().fold((0.0, 0.0), |a, e| {
+                (a.0 + e.bus_v, a.1 + e.shunt_ma / 1000.0)
+            });
+            defmt::info!(
+                "{{ \"v\": {}, \"i\": {} }}",
+                v / avg.len() as f32,
+                i / avg.len() as f32
+            );
+            avg.clear();
+        }
+        avg.push_back(reading.clone()).unwrap(); // SAFE
     }
 }
 
