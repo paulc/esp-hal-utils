@@ -7,6 +7,7 @@
 )]
 
 use esp_hal::{clock::CpuClock, gpio::Pin, i2c, time::Rate, timer::timg::TimerGroup, Async};
+use esp_radio::esp_now::{EspNow, PeerInfo, BROADCAST_ADDRESS};
 
 #[cfg(target_arch = "riscv32")]
 use esp_hal::interrupt::software::SoftwareInterruptControl;
@@ -17,7 +18,11 @@ use esp_backtrace as _;
 use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
 use embassy_executor::Spawner;
 use embassy_futures::select::{select, Either};
-use embassy_sync::{blocking_mutex::raw::NoopRawMutex, mutex::Mutex};
+use embassy_sync::{
+    blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex},
+    mutex::Mutex,
+    signal::Signal,
+};
 use embassy_time::{Duration, Ticker, Timer};
 
 use embedded_graphics::{
@@ -32,19 +37,25 @@ use static_cell::StaticCell;
 
 use esp_hal_utils::c6_lcd::{init_lcd, LcdMessage, LcdSender};
 use esp_hal_utils::encoder::{self, EncoderMsg};
+use esp_hal_utils::format_mac::format_mac;
 use esp_hal_utils::ina219;
 
-use portable_atomic::{AtomicI32, Ordering};
+use portable_atomic::{AtomicBool, AtomicI32, Ordering};
 
 static I2C_BUS: StaticCell<Mutex<NoopRawMutex, i2c::master::I2c<Async>>> = StaticCell::new();
 static ENCODER: AtomicI32 = AtomicI32::new(0);
+static ESPNOW_TX: AtomicBool = AtomicBool::new(true);
+static VI_SIGNAL: Signal<CriticalSectionRawMutex, (f32, f32)> = Signal::new();
+
+static RADIO_CTRL: StaticCell<esp_radio::Controller<'static>> = StaticCell::new();
+static ESP_NOW: StaticCell<EspNow<'static>> = StaticCell::new();
 
 #[esp_rtos::main]
 async fn main(spawner: Spawner) {
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let peripherals = esp_hal::init(config);
 
-    esp_alloc::heap_allocator!(size: 32 * 1024);
+    esp_alloc::heap_allocator!(size: 64 * 1024);
 
     defmt::info!("Init!");
 
@@ -59,6 +70,20 @@ async fn main(spawner: Spawner) {
     );
 
     info!("Embassy initialized!");
+
+    // Initialise ESP_NOW
+    defmt::info!("Initialise ESP_NOW");
+    let esp_radio_ctrl = RADIO_CTRL.init(esp_radio::init().unwrap());
+    let wifi = peripherals.WIFI;
+    let (mut controller, interfaces) =
+        esp_radio::wifi::new(esp_radio_ctrl, wifi, Default::default()).unwrap();
+    controller.set_mode(esp_radio::wifi::WifiMode::Sta).unwrap();
+    controller.start().unwrap();
+
+    // let esp_now = ESP_NOW.init(interfaces.esp_now);
+    let esp_now = ESP_NOW.init(interfaces.esp_now);
+
+    spawner.spawn(now_task(esp_now, 11)).unwrap();
 
     // Init LCD (pass peripherals)
     let mut lcd_tx = init_lcd(
@@ -94,6 +119,7 @@ async fn main(spawner: Spawner) {
     }
 
     defmt::info!("Scan I2C bus: DONE");
+
     // Create shared I2C bus
     let i2c_bus = I2C_BUS.init(Mutex::new(i2c));
 
@@ -203,8 +229,9 @@ async fn main(spawner: Spawner) {
             let (v, i) = avg.iter().fold((0.0, 0.0), |a, e| {
                 (a.0 + e.bus_v, a.1 + e.shunt_ma / 1000.0)
             });
+            VI_SIGNAL.signal((v / avg.len() as f32, i / avg.len() as f32));
             defmt::info!(
-                "{{ \"v\": {}, \"i\": {} }}",
+                "AVG: {{ \"v\": {}, \"i\": {} }}",
                 v / avg.len() as f32,
                 i / avg.len() as f32
             );
@@ -336,4 +363,67 @@ async fn update_display(
 
     // Return new reading
     next
+}
+
+#[embassy_executor::task]
+async fn now_task(esp_now: &'static mut EspNow<'static>, channel: u8) {
+    esp_now.set_channel(channel).unwrap();
+
+    defmt::info!("ESP-NOW VERSION: {}", esp_now.version().unwrap());
+    defmt::info!(
+        "        MAC ADDRESS: {}",
+        format_mac(&esp_radio::wifi::sta_mac())
+    );
+
+    let hub_address = find_hub(esp_now).await;
+
+    defmt::info!("ESP-NOW FOUND HUB: {}", format_mac(&hub_address));
+
+    let mut ticker = Ticker::every(Duration::from_millis(5000));
+    let mut msg = heapless::String::<80>::new();
+
+    loop {
+        if ESPNOW_TX.load(Ordering::Relaxed) {
+            let (v, i) = VI_SIGNAL.wait().await;
+            if let Ok(_) = write!(&mut msg, "{{ \"v\": {:.6}, \"i\": {:.6} }}", v, i) {
+                let status = esp_now.send_async(&hub_address, msg.as_bytes()).await;
+                defmt::info!(
+                    "ESP-NOW TX -> {}: {} {}",
+                    format_mac(&hub_address),
+                    msg,
+                    status
+                );
+            }
+            msg.clear();
+        }
+        ticker.next().await;
+    }
+}
+
+async fn find_hub(esp_now: &mut EspNow<'_>) -> [u8; 6] {
+    loop {
+        let r = esp_now.receive_async().await;
+        if r.info.dst_address == BROADCAST_ADDRESS && r.data() == b"<<HUB>>" {
+            defmt::info!(
+                "ESP-NOW RX: [{}]->[{}] >> {} [rssi={}]",
+                format_mac(&r.info.src_address),
+                format_mac(&r.info.dst_address),
+                core::str::from_utf8(r.data()).unwrap_or("UTF8 Error"),
+                r.info.rx_control.rssi
+            );
+            if !esp_now.peer_exists(&r.info.src_address) {
+                defmt::info!("ESP-NOW ADD PEER: {}", format_mac(&r.info.src_address));
+                esp_now
+                    .add_peer(PeerInfo {
+                        interface: esp_radio::esp_now::EspNowWifiInterface::Sta,
+                        peer_address: r.info.src_address,
+                        lmk: None,
+                        channel: None,
+                        encrypt: false,
+                    })
+                    .unwrap();
+            }
+            break r.info.src_address;
+        }
+    }
 }
