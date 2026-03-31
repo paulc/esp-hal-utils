@@ -23,20 +23,19 @@ pub fn init(
 ) -> Receiver<'static, NoopRawMutex, EncoderMsg, CHANNEL_LENGTH> {
     static ENCODER_CHANNEL: StaticCell<Channel<NoopRawMutex, EncoderMsg, CHANNEL_LENGTH>> =
         StaticCell::new();
-    static ENCODER_TX: StaticCell<Sender<NoopRawMutex, EncoderMsg, CHANNEL_LENGTH>> =
-        StaticCell::new();
     let encoder_chan = ENCODER_CHANNEL.init(Channel::new());
-    let encoder_tx = ENCODER_TX.init(encoder_chan.sender());
-    spawner.must_spawn(encoder_task(clk, dt, sw, encoder_tx));
+    spawner.must_spawn(encoder_task(clk, dt, sw, encoder_chan.sender()));
     encoder_chan.receiver()
 }
+
+const DEBOUNCE_MS: u64 = 2;
 
 #[embassy_executor::task]
 async fn encoder_task(
     clk: AnyPin<'static>,
     dt: AnyPin<'static>,
     sw: AnyPin<'static>,
-    encoder_tx: &'static mut Sender<'static, NoopRawMutex, EncoderMsg, CHANNEL_LENGTH>,
+    encoder_tx: Sender<'static, NoopRawMutex, EncoderMsg, CHANNEL_LENGTH>,
 ) {
     let mut enc_sw = Input::new(sw, InputConfig::default().with_pull(Pull::Up));
     let mut enc_clk = Input::new(clk, InputConfig::default().with_pull(Pull::Up));
@@ -45,6 +44,8 @@ async fn encoder_task(
     loop {
         match select(enc_clk.wait_for_any_edge(), enc_sw.wait_for_falling_edge()).await {
             Either::First(_) => {
+                // Debounce input
+                Timer::after_millis(DEBOUNCE_MS).await;
                 match (enc_clk.is_high(), enc_dt.is_high()) {
                     (true, false) | (false, true) => encoder_tx.send(EncoderMsg::Increment).await,
                     (true, true) | (false, false) => encoder_tx.send(EncoderMsg::Decrement).await,
@@ -52,7 +53,7 @@ async fn encoder_task(
             }
             Either::Second(_) => {
                 // Debounce input
-                Timer::after_millis(5).await;
+                Timer::after_millis(DEBOUNCE_MS).await;
                 if enc_sw.is_low() {
                     encoder_tx.send(EncoderMsg::Button).await;
                 }
